@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white text-apple-dark antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-apple-blue text-white px-8 py-3 rounded-full font-medium text-lg
+           hover:bg-blue-600 transition-all duration-300 ease-in-out
+           shadow-lg hover:shadow-xl transform hover:scale-105;
+  }
+
+  .card {
+    @apply bg-white rounded-3xl shadow-xl p-8 border border-gray-100;
+  }
+
+  .drag-area {
+    @apply border-2 border-dashed border-gray-300 rounded-3xl p-12
+           transition-all duration-300 ease-in-out
+           hover:border-apple-blue hover:bg-apple-gray/50;
+  }
+
+  .drag-area.active {
+    @apply border-apple-blue bg-apple-blue/5;
+  }
+}

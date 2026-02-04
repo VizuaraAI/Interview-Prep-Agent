@@ -1,0 +1,12 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17
+docling==2.71.0
+supabase==2.10.0
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+openai==1.57.4
+elevenlabs==1.13.5
+numpy>=1.24.0
+PyPDF2==3.0.1
