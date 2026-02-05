@@ -10,6 +10,7 @@ interface Message {
   audio?: string;
 }
 
+
 export default function InterviewPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -30,6 +31,9 @@ export default function InterviewPage() {
   const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);
   const [showInterruptionWarning, setShowInterruptionWarning] = useState(false);
   const [questionMetadata, setQuestionMetadata] = useState<any>(null);
+  const [interviewComplete, setInterviewComplete] = useState(false);
+  const [projectPhaseComplete, setProjectPhaseComplete] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -42,7 +46,6 @@ export default function InterviewPage() {
     if (messages.length > 0) {
       const latestMessage = messages[messages.length - 1];
       if (latestMessage.role === 'assistant' && latestMessage.audio) {
-        // Small delay to ensure audio element is ready
         setTimeout(() => {
           playAudio(latestMessage.audio!);
         }, 100);
@@ -51,10 +54,12 @@ export default function InterviewPage() {
   }, [messages]);
 
   useEffect(() => {
-    console.log('🔄 Current Phase:', currentPhase);
-    console.log('📊 Question Metadata State:', questionMetadata);
-    console.log('✅ Should show RAG card:', currentPhase === 'factual_questions' && questionMetadata && questionMetadata.current_topic);
-  }, [currentPhase, questionMetadata]);
+    console.log('Current Phase:', currentPhase);
+    // Mark project phase as complete when we move past it
+    if (currentPhase === 'gpa_questions' || currentPhase === 'factual_questions') {
+      setProjectPhaseComplete(true);
+    }
+  }, [currentPhase]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -66,7 +71,6 @@ export default function InterviewPage() {
       const audioUrl = URL.createObjectURL(audioBlob);
       audioRef.current.src = audioUrl;
 
-      // Track when interviewer is speaking
       audioRef.current.onplay = () => setIsInterviewerSpeaking(true);
       audioRef.current.onended = () => setIsInterviewerSpeaking(false);
       audioRef.current.onpause = () => setIsInterviewerSpeaking(false);
@@ -118,7 +122,6 @@ export default function InterviewPage() {
   const sendMessage = async () => {
     if (!userInput.trim() || !conversationId) return;
 
-    // Prevent interrupting the interviewer
     if (isInterviewerSpeaking) {
       setShowInterruptionWarning(true);
       setTimeout(() => setShowInterruptionWarning(false), 3000);
@@ -148,27 +151,26 @@ export default function InterviewPage() {
 
       setMessages(prev => [...prev, assistantMessage]);
 
-      // Check if phase changed and update
       const newPhase = response.data.phase || currentPhase;
+      console.log('Backend returned phase:', response.data.phase, '| Current phase:', currentPhase, '| New phase:', newPhase);
       if (newPhase !== currentPhase) {
+        console.log('Phase changing from', currentPhase, 'to', newPhase);
         setCurrentPhase(newPhase);
 
-        // If transitioning to factual questions, get and show topics
         if (newPhase === 'factual_questions' && response.data.student_topics) {
           setStudentTopics(response.data.student_topics);
           setShowTopics(true);
-
-          // Auto-hide topics after 5 seconds
           setTimeout(() => setShowTopics(false), 5000);
         }
       }
 
-      // Update question metadata if available (for Phase IV)
       if (response.data.question_metadata) {
-        console.log('📊 Question Metadata Received:', response.data.question_metadata);
         setQuestionMetadata(response.data.question_metadata);
-      } else {
-        console.log('⚠️ No question metadata in response');
+      }
+
+      // Track interview completion from backend
+      if (response.data.interview_complete) {
+        setInterviewComplete(true);
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -185,7 +187,6 @@ export default function InterviewPage() {
   };
 
   const startRecording = async () => {
-    // Prevent interrupting the interviewer
     if (isInterviewerSpeaking) {
       setShowInterruptionWarning(true);
       setTimeout(() => setShowInterruptionWarning(false), 3000);
@@ -207,8 +208,6 @@ export default function InterviewPage() {
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
         await transcribeAudio(audioBlob);
-
-        // Stop all tracks to release microphone
         stream.getTracks().forEach(track => track.stop());
       };
 
@@ -242,8 +241,6 @@ export default function InterviewPage() {
 
       const transcribedText = response.data.text;
       setUserInput(transcribedText);
-
-      // User can now review and edit before sending
     } catch (error) {
       console.error('Error transcribing audio:', error);
       alert('Error transcribing audio. Please try again.');
@@ -299,24 +296,26 @@ export default function InterviewPage() {
             {/* Phase Indicator */}
             <div className="flex gap-2">
               <span className={`px-4 py-2 rounded-full text-sm font-medium transition-all bg-green-500 text-white`}>
-                ✓ Phase I
+                Phase I
               </span>
               <span className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
                 currentPhase === 'greeting' ? 'bg-apple-blue text-white' :
-                (currentPhase === 'project_questions' || currentPhase === 'factual_questions') ? 'bg-green-500 text-white' :
+                ['project_questions', 'gpa_questions', 'factual_questions'].includes(currentPhase) ? 'bg-green-500 text-white' :
                 'bg-gray-200 text-gray-600'
               }`}>
-                {(currentPhase === 'project_questions' || currentPhase === 'factual_questions') && '✓ '}Phase II
+                Phase II
               </span>
               <span className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
                 currentPhase === 'project_questions' ? 'bg-apple-blue text-white' :
-                currentPhase === 'factual_questions' ? 'bg-green-500 text-white' :
+                ['gpa_questions', 'factual_questions'].includes(currentPhase) ? 'bg-green-500 text-white' :
                 'bg-gray-200 text-gray-600'
               }`}>
-                {currentPhase === 'factual_questions' && '✓ '}Phase III
+                Phase III
               </span>
               <span className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                currentPhase === 'factual_questions' ? 'bg-apple-blue text-white' : 'bg-gray-200 text-gray-600'
+                currentPhase === 'factual_questions' ? 'bg-apple-blue text-white' :
+                currentPhase === 'gpa_questions' ? 'bg-gray-200 text-gray-600' :
+                'bg-gray-200 text-gray-600'
               }`}>
                 Phase IV
               </span>
@@ -350,7 +349,6 @@ export default function InterviewPage() {
                     )}
                   </div>
 
-                  {/* Question from Question Bank */}
                   {questionMetadata.question_text && (
                     <div className="mb-2">
                       <p className="text-xs font-medium text-purple-900 mb-1">Question from Bank:</p>
@@ -360,7 +358,6 @@ export default function InterviewPage() {
                     </div>
                   )}
 
-                  {/* Source Section */}
                   {questionMetadata.question_source && (
                     <div className="mb-1">
                       <p className="text-xs text-purple-700">
@@ -391,8 +388,8 @@ export default function InterviewPage() {
                 </svg>
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-blue-900 mb-2">📚 RAG Analysis Complete</h3>
-                <p className="text-sm text-blue-800 mb-2">Based on your resume, we've identified these ML topics:</p>
+                <h3 className="font-semibold text-blue-900 mb-2">RAG Analysis Complete</h3>
+                <p className="text-sm text-blue-800 mb-2">Based on your resume, we&apos;ve identified these ML topics:</p>
                 <div className="flex flex-wrap gap-2">
                   {studentTopics.map((topic, index) => (
                     <span key={index} className="bg-white px-3 py-1 rounded-full text-sm font-medium text-blue-700 border border-blue-200">
@@ -510,29 +507,45 @@ export default function InterviewPage() {
           </p>
         </div>
 
-        {/* End Interview Button */}
-        {currentPhase === 'factual_questions' && messages.length > 15 && (
-          <div className="mt-6 bg-gradient-to-r from-blue-50 to-purple-50 rounded-3xl shadow-lg p-6 border-2 border-blue-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-gray-800 mb-1">Ready to see your results?</h3>
-                <p className="text-sm text-gray-600">
-                  Click below to end the interview and view your comprehensive evaluation report.
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  if (confirm('Are you sure you want to end the interview and view your evaluation?')) {
-                    router.push(`/evaluation/${conversationId}`);
-                  }
-                }}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-8 py-3 rounded-xl font-semibold hover:from-blue-700 hover:to-indigo-700 transition-all shadow-md flex items-center gap-2 whitespace-nowrap"
-              >
-                <span>View Evaluation</span>
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
+        {/* Evaluation Buttons - Show at bottom */}
+        {(projectPhaseComplete || interviewComplete) && (
+          <div className="mt-6 bg-gradient-to-r from-gray-50 to-slate-50 rounded-3xl shadow-lg p-6 border-2 border-gray-200">
+            <div className="text-center mb-4">
+              <h3 className="text-lg font-bold text-gray-800">
+                {interviewComplete ? 'Interview Complete!' : 'Phase III Complete!'}
+              </h3>
+              <p className="text-sm text-gray-600">
+                {interviewComplete
+                  ? 'View your evaluation scores for each phase.'
+                  : 'Your project discussion has been evaluated.'}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-4 justify-center">
+              {/* Phase 3 (Project) Scores Button - Opens in new tab */}
+              {projectPhaseComplete && (
+                <button
+                  onClick={() => window.open(`/evaluation/project/${conversationId}`, '_blank')}
+                  className="bg-gradient-to-r from-green-600 to-emerald-600 text-white px-8 py-3 rounded-xl font-semibold hover:from-green-700 hover:to-emerald-700 transition-all shadow-md flex items-center gap-2"
+                >
+                  <span>View Phase 3 Scores</span>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </button>
+              )}
+
+              {/* Phase 4 (Factual) Scores Button - Opens in new tab */}
+              {interviewComplete && (
+                <button
+                  onClick={() => window.open(`/evaluation/factual/${conversationId}`, '_blank')}
+                  className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-8 py-3 rounded-xl font-semibold hover:from-purple-700 hover:to-indigo-700 transition-all shadow-md flex items-center gap-2"
+                >
+                  <span>View Phase 4 Scores</span>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
         )}

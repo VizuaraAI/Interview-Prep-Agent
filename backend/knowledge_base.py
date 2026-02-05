@@ -248,13 +248,13 @@ Include their specific areas AND foundational topics for variety."""
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.3,
-            max_tokens=200
+            max_completion_tokens=200
         )
 
         topics_str = response.choices[0].message.content.strip()

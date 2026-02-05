@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from docling.document_converter import DocumentConverter
 import os
@@ -14,10 +14,12 @@ load_dotenv()
 
 app = FastAPI(title="ML Interview Agent - Resume Upload")
 
-# CORS middleware
+# CORS middleware - Allow frontend origins
+# In production, set ALLOWED_ORIGINS env var to your Vercel domain
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,6 +29,74 @@ app.add_middleware(
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
+
+
+def run_project_evaluation(conversation_id: str, student_name: str):
+    """Background task to evaluate project phase and store results."""
+    from evaluation import evaluate_project_phase, generate_dynamic_recommendations
+    import json
+
+    try:
+        # Fetch project-phase messages using phase tag
+        messages_result = supabase.table("messages").select("*").eq(
+            "conversation_id", conversation_id
+        ).eq("phase", "project_questions").order("created_at").execute()
+
+        project_messages = [{"role": m["role"], "content": m["content"]} for m in messages_result.data]
+
+        if len(project_messages) > 2:
+            evaluation = evaluate_project_phase(project_messages, student_name)
+            recommendations = generate_dynamic_recommendations(
+                "project", evaluation, project_messages
+            )
+
+            # Store in database
+            supabase.table("evaluations").insert({
+                "conversation_id": conversation_id,
+                "eval_type": "project",
+                "eval_data": json.dumps(evaluation),
+                "recommendations": json.dumps(recommendations)
+            }).execute()
+
+            print(f"Project evaluation stored for conversation {conversation_id}")
+        else:
+            print(f"Not enough project messages to evaluate ({len(project_messages)})")
+    except Exception as e:
+        print(f"Error in background project evaluation: {e}")
+
+
+def run_factual_evaluation(conversation_id: str, questions_asked: List[str]):
+    """Background task to evaluate factual phase and store results."""
+    from evaluation import evaluate_factual_phase, generate_dynamic_recommendations
+    import json
+
+    try:
+        # Fetch factual-phase messages using phase tag
+        messages_result = supabase.table("messages").select("*").eq(
+            "conversation_id", conversation_id
+        ).eq("phase", "factual_questions").order("created_at").execute()
+
+        factual_messages = [{"role": m["role"], "content": m["content"]} for m in messages_result.data]
+
+        if len(factual_messages) > 2:
+            evaluation = evaluate_factual_phase(factual_messages, questions_asked)
+            recommendations = generate_dynamic_recommendations(
+                "factual", evaluation, factual_messages
+            )
+
+            # Store in database
+            supabase.table("evaluations").insert({
+                "conversation_id": conversation_id,
+                "eval_type": "factual",
+                "eval_data": json.dumps(evaluation),
+                "recommendations": json.dumps(recommendations)
+            }).execute()
+
+            print(f"Factual evaluation stored for conversation {conversation_id}")
+        else:
+            print(f"Not enough factual messages to evaluate ({len(factual_messages)})")
+    except Exception as e:
+        print(f"Error in background factual evaluation: {e}")
 
 
 def extract_name_from_pdf(pdf_path: str) -> str:
@@ -193,6 +263,90 @@ def parse_resume_sections(text: str) -> Dict[str, str]:
     return sections
 
 
+def extract_top_two_projects(projects_section: str) -> List[Dict[str, str]]:
+    """
+    Extract the top 2 projects from the projects section.
+    Returns list of dicts with 'title' and 'content' for each project.
+    """
+    if not projects_section:
+        return []
+
+    projects = []
+    lines = projects_section.split('\n')
+    current_project = None
+    current_content = []
+
+    for line in lines:
+        line_stripped = line.strip()
+
+        # Project titles are usually bold or marked with ** or have specific formatting
+        # Or are standalone lines with project names
+        is_project_title = False
+
+        # Check if it looks like a project title
+        if line_stripped and not line_stripped.startswith('-') and not line_stripped.startswith('•'):
+            # If it's a short line (likely a title) or contains certain keywords
+            words = line_stripped.split()
+            if len(words) <= 10 or any(keyword in line_stripped.lower() for keyword in ['project', 'system', 'application', 'platform', 'tool']):
+                # Likely a project title
+                if current_project is not None:
+                    # Save previous project
+                    projects.append({
+                        'title': current_project,
+                        'content': '\n'.join(current_content).strip()
+                    })
+                current_project = line_stripped.replace('**', '').replace('*', '').strip()
+                current_content = []
+                is_project_title = True
+
+        if not is_project_title and current_project is not None:
+            current_content.append(line)
+
+    # Save last project
+    if current_project is not None and current_content:
+        projects.append({
+            'title': current_project,
+            'content': '\n'.join(current_content).strip()
+        })
+
+    # Return top 2 projects (first two are usually most important)
+    return projects[:2] if len(projects) >= 2 else projects
+
+
+def extract_gpa(education_section: str) -> float:
+    """
+    Extract GPA from education section.
+    Returns GPA as float, or 0 if not found.
+    """
+    if not education_section:
+        return 0.0
+
+    # Look for GPA patterns like "GPA: 8.5", "CGPA: 8.5/10", "Grade: 8.5"
+    import re
+
+    # Common GPA patterns
+    patterns = [
+        r'gpa[:\s]+(\d+\.?\d*)',
+        r'cgpa[:\s]+(\d+\.?\d*)',
+        r'grade[:\s]+(\d+\.?\d*)',
+        r'percentage[:\s]+(\d+\.?\d*)%?'
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, education_section.lower())
+        if match:
+            try:
+                gpa = float(match.group(1))
+                # Normalize percentage to 10-point scale if it's > 10
+                if gpa > 10 and gpa <= 100:
+                    gpa = gpa / 10
+                return gpa
+            except ValueError:
+                continue
+
+    return 0.0
+
+
 @app.post("/upload-resume")
 async def upload_resume(file: UploadFile = File(...)):
     """Upload and process resume PDF"""
@@ -220,6 +374,10 @@ async def upload_resume(file: UploadFile = File(...)):
         # Parse sections
         sections = parse_resume_sections(extracted_text)
 
+        # Extract GPA from education section
+        education_section = sections.get("Education", "")
+        gpa = extract_gpa(education_section)
+
         # Store in Supabase
         # Insert student record
         student_data = {
@@ -229,7 +387,8 @@ async def upload_resume(file: UploadFile = File(...)):
             "linkedin": contact_info["linkedin"],
             "github": contact_info["github"],
             "portfolio": contact_info["portfolio"],
-            "resume_file_path": file.filename
+            "resume_file_path": file.filename,
+            "gpa": gpa
         }
 
         student_response = supabase.table("students").insert(student_data).execute()
@@ -271,8 +430,14 @@ async def upload_resume(file: UploadFile = File(...)):
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
-    return {"message": "ML Interview Agent Backend - Part 1: Resume Upload"}
+    """Root endpoint"""
+    return {"message": "ML Interview Agent Backend - API is running"}
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for deployment"""
+    return {"status": "healthy", "service": "interview-prep-agent"}
 
 
 @app.get("/student/{student_id}")
@@ -306,7 +471,7 @@ async def get_student(student_id: str):
 @app.post("/start-conversation/{student_id}")
 async def start_conversation(student_id: str):
     """Start a conversation/interview with the student"""
-    from conversation import generate_greeting, create_resume_summary, text_to_speech
+    from conversation import generate_greeting, create_resume_summary, text_to_speech, strip_markdown
     import base64
 
     try:
@@ -323,23 +488,33 @@ async def start_conversation(student_id: str):
         for section in sections_response.data:
             sections[section["heading"]] = section["content"]
 
+        # Extract top 2 projects
+        projects_section = sections.get("Projects", "")
+        top_projects = extract_top_two_projects(projects_section)
+
         # Create resume summary for context
         resume_summary = create_resume_summary(sections)
 
         # Get first name for more natural conversation
         first_name = get_first_name(student["name"])
 
-        # Generate greeting
+        # Generate greeting and strip markdown
         greeting_text = generate_greeting(first_name, resume_summary)
+        greeting_text = strip_markdown(greeting_text)
 
         # Generate voice audio
         audio_bytes = text_to_speech(greeting_text)
         audio_base64 = base64.b64encode(audio_bytes).decode('utf-8') if audio_bytes else None
 
-        # Create conversation record
+        # Create conversation record with projects data
+        import json
         conversation_data = {
             "student_id": student_id,
-            "phase": "greeting"
+            "phase": "greeting",
+            "projects_data": json.dumps(top_projects) if top_projects else None,
+            "current_project_index": 0,
+            "project_1_questions_count": 0,
+            "project_2_questions_count": 0
         }
         conversation_response = supabase.table("conversations").insert(conversation_data).execute()
         conversation_id = conversation_response.data[0]["id"]
@@ -348,7 +523,8 @@ async def start_conversation(student_id: str):
         message_data = {
             "conversation_id": conversation_id,
             "role": "assistant",
-            "content": greeting_text
+            "content": greeting_text,
+            "phase": "greeting"
         }
         supabase.table("messages").insert(message_data).execute()
 
@@ -404,12 +580,13 @@ async def speech_to_text(file: UploadFile = File(...)):
 
 
 @app.post("/continue-conversation/{conversation_id}")
-async def continue_conversation_endpoint(conversation_id: str, user_message: Dict[str, str]):
+async def continue_conversation_endpoint(conversation_id: str, user_message: Dict[str, str], background_tasks: BackgroundTasks):
     """Continue the conversation with user's response"""
     from conversation import (
         continue_conversation, continue_project_questions, start_project_questions,
         start_factual_questions, continue_factual_questions,
-        create_resume_summary, text_to_speech, is_ready_for_technical
+        create_resume_summary, text_to_speech, is_ready_for_technical,
+        transition_to_second_project, start_gpa_questions, strip_markdown
     )
     from knowledge_base import extract_student_topics, select_next_question
     import base64
@@ -426,11 +603,12 @@ async def continue_conversation_endpoint(conversation_id: str, user_message: Dic
 
         user_text = user_message.get("message", "")
 
-        # Store user message
+        # Store user message (tagged with current phase before any transition)
         user_msg_data = {
             "conversation_id": conversation_id,
             "role": "user",
-            "content": user_text
+            "content": user_text,
+            "phase": current_phase
         }
         supabase.table("messages").insert(user_msg_data).execute()
 
@@ -466,61 +644,138 @@ async def continue_conversation_endpoint(conversation_id: str, user_message: Dic
             })
 
         # Get conversation metadata
+        import json
         project_q_count = conversation.get("project_questions_count", 0)
+        project_1_q_count = conversation.get("project_1_questions_count", 0)
+        project_2_q_count = conversation.get("project_2_questions_count", 0)
+        current_project_index = conversation.get("current_project_index", 0)
+        projects_data = json.loads(conversation.get("projects_data", "[]")) if conversation.get("projects_data") else []
         factual_q_count = conversation.get("factual_questions_count", 0)
         student_topics = conversation.get("student_topics", [])
         questions_asked = conversation.get("questions_asked", [])
         question_metadata = None  # Will be set if we're asking a factual question
+        gpa = student.get("gpa", 0.0)
+        education_section = sections.get("Education", "")
 
         # Check for phase transition
         if current_phase == "greeting" and is_ready_for_technical(user_text):
-            # Transition to project questions (Phase III)
-            supabase.table("conversations").update({
-                "phase": "project_questions",
-                "project_questions_count": 1
-            }).eq("id", conversation_id).execute()
+            # Transition to project questions - start with first project
+            if projects_data and len(projects_data) > 0:
+                first_project = projects_data[0]
+                supabase.table("conversations").update({
+                    "phase": "project_questions",
+                    "current_project_index": 0,
+                    "project_1_questions_count": 1
+                }).eq("id", conversation_id).execute()
 
-            assistant_response = start_project_questions(first_name, projects)
-            current_phase = "project_questions"
+                assistant_response = start_project_questions(
+                    first_name,
+                    first_project.get("title", ""),
+                    first_project.get("content", ""),
+                    project_number=1
+                )
+                current_phase = "project_questions"
+            else:
+                # No projects found, skip to factual questions
+                current_phase = "greeting"
+                assistant_response = continue_conversation(message_history, first_name, resume_summary)
 
         elif current_phase == "project_questions":
-            # Check if we should transition to factual questions (after ~5 project questions)
-            if project_q_count >= 5:
-                # Extract student topics if not done yet
-                if not student_topics:
-                    student_topics = extract_student_topics(sections)
+            # Handle project questions phase with TWO projects
+            if current_project_index == 0:
+                # Working on first project
+                if project_1_q_count >= 4 and len(projects_data) > 1:
+                    # Transition to second project (after 2-3 questions on first project)
+                    second_project = projects_data[1]
+                    supabase.table("conversations").update({
+                        "current_project_index": 1,
+                        "project_2_questions_count": 1
+                    }).eq("id", conversation_id).execute()
 
-                # Get first factual question with similarity scoring and topic diversity
-                next_q = select_next_question([], student_topics, resume_text, topics_covered={})
+                    assistant_response = transition_to_second_project(
+                        first_name,
+                        second_project.get("title", ""),
+                        second_project.get("content", "")
+                    )
+                    current_project_index = 1
+                else:
+                    # Continue with first project
+                    first_project = projects_data[0] if projects_data else {"title": "", "content": ""}
+                    supabase.table("conversations").update({
+                        "project_1_questions_count": project_1_q_count + 1
+                    }).eq("id", conversation_id).execute()
 
-                # Transition to factual questions (Phase IV)
-                supabase.table("conversations").update({
-                    "phase": "factual_questions",
-                    "student_topics": student_topics,
-                    "questions_asked": [next_q["question"]],
-                    "factual_questions_count": 1
-                }).eq("id", conversation_id).execute()
+                    assistant_response = continue_project_questions(
+                        message_history,
+                        first_name,
+                        first_project.get("title", ""),
+                        first_project.get("content", ""),
+                        project_number=1
+                    )
 
-                assistant_response = start_factual_questions(first_name, next_q)
-                current_phase = "factual_questions"
+            elif current_project_index == 1:
+                # Working on second project
+                if project_2_q_count >= 4:
+                    # Done with both projects, transition to GPA questions
+                    supabase.table("conversations").update({
+                        "phase": "gpa_questions",
+                        "project_eval_triggered": True
+                    }).eq("id", conversation_id).execute()
 
-                # Store the question metadata for response
-                question_metadata = {
-                    "similarity_score": next_q.get("similarity_score"),
-                    "max_similarity": next_q.get("max_similarity"),
-                    "match_reason": next_q.get("match_reason"),
-                    "matched_topics": next_q.get("matched_topics", []),
-                    "current_topic": next_q.get("topic"),
-                    "question_text": next_q.get("question"),
-                    "question_source": next_q.get("topic")  # The topic is the section name in ML_QUESTIONS
-                }
-            else:
-                # Continue project questions
-                supabase.table("conversations").update({
-                    "project_questions_count": project_q_count + 1
-                }).eq("id", conversation_id).execute()
+                    assistant_response = start_gpa_questions(first_name, gpa, education_section)
+                    current_phase = "gpa_questions"
 
-                assistant_response = continue_project_questions(message_history, first_name, projects)
+                    # Trigger project evaluation in background
+                    background_tasks.add_task(
+                        run_project_evaluation,
+                        conversation_id,
+                        student["name"]
+                    )
+                else:
+                    # Continue with second project
+                    second_project = projects_data[1] if len(projects_data) > 1 else {"title": "", "content": ""}
+                    supabase.table("conversations").update({
+                        "project_2_questions_count": project_2_q_count + 1
+                    }).eq("id", conversation_id).execute()
+
+                    assistant_response = continue_project_questions(
+                        message_history,
+                        first_name,
+                        second_project.get("title", ""),
+                        second_project.get("content", ""),
+                        project_number=2
+                    )
+
+        elif current_phase == "gpa_questions":
+            # After GPA discussion (1-2 exchanges), transition to factual questions
+            # Extract student topics if not done yet
+            if not student_topics:
+                student_topics = extract_student_topics(sections)
+
+            # Get first factual question with similarity scoring and topic diversity
+            next_q = select_next_question([], student_topics, resume_text, topics_covered={})
+
+            # Transition to factual questions (Phase IV)
+            supabase.table("conversations").update({
+                "phase": "factual_questions",
+                "student_topics": student_topics,
+                "questions_asked": [next_q["question"]],
+                "factual_questions_count": 1
+            }).eq("id", conversation_id).execute()
+
+            assistant_response = start_factual_questions(first_name, next_q)
+            current_phase = "factual_questions"
+
+            # Store the question metadata for response
+            question_metadata = {
+                "similarity_score": next_q.get("similarity_score"),
+                "max_similarity": next_q.get("max_similarity"),
+                "match_reason": next_q.get("match_reason"),
+                "matched_topics": next_q.get("matched_topics", []),
+                "current_topic": next_q.get("topic"),
+                "question_text": next_q.get("question"),
+                "question_source": next_q.get("topic")  # The topic is the section name in ML_QUESTIONS
+            }
 
         elif current_phase == "factual_questions":
             # Continue factual questions
@@ -575,26 +830,41 @@ async def continue_conversation_endpoint(conversation_id: str, user_message: Dic
                     is_final=True
                 )
 
+                # Trigger factual evaluation in background
+                background_tasks.add_task(
+                    run_factual_evaluation,
+                    conversation_id,
+                    questions_asked or []
+                )
+
         else:
             # Still in greeting phase (Phase II)
             assistant_response = continue_conversation(message_history, first_name, resume_summary)
+
+        # Strip markdown from response (for display and TTS)
+        assistant_response = strip_markdown(assistant_response)
 
         # Generate voice audio
         audio_bytes = text_to_speech(assistant_response)
         audio_base64 = base64.b64encode(audio_bytes).decode('utf-8') if audio_bytes else None
 
-        # Store assistant message
+        # Store assistant message (tagged with current phase after any transition)
         assistant_msg_data = {
             "conversation_id": conversation_id,
             "role": "assistant",
-            "content": assistant_response
+            "content": assistant_response,
+            "phase": current_phase
         }
         supabase.table("messages").insert(assistant_msg_data).execute()
+
+        # Determine if interview is truly complete (after final wrap-up)
+        is_interview_complete = current_phase == "factual_questions" and factual_q_count >= 5
 
         response_data = {
             "message": assistant_response,
             "audio": audio_base64,
-            "phase": current_phase
+            "phase": current_phase,
+            "interview_complete": is_interview_complete
         }
 
         # Include student topics when in factual questions phase
@@ -774,6 +1044,62 @@ async def get_evaluation(conversation_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching evaluation: {str(e)}")
+
+
+@app.get("/evaluate/project/{conversation_id}")
+async def get_project_evaluation(conversation_id: str):
+    """Retrieve the project phase evaluation."""
+    import json
+    try:
+        result = supabase.table("evaluations").select("*").eq(
+            "conversation_id", conversation_id
+        ).eq("eval_type", "project").execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Project evaluation not ready yet")
+
+        eval_row = result.data[0]
+        eval_data = json.loads(eval_row["eval_data"]) if isinstance(eval_row["eval_data"], str) else eval_row["eval_data"]
+        recommendations = json.loads(eval_row["recommendations"]) if isinstance(eval_row.get("recommendations"), str) else eval_row.get("recommendations", [])
+
+        return {
+            "success": True,
+            "evaluation": eval_data,
+            "recommendations": recommendations
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching project evaluation: {str(e)}")
+
+
+@app.get("/evaluate/factual/{conversation_id}")
+async def get_factual_evaluation(conversation_id: str):
+    """Retrieve the factual phase evaluation."""
+    import json
+    try:
+        result = supabase.table("evaluations").select("*").eq(
+            "conversation_id", conversation_id
+        ).eq("eval_type", "factual").execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Factual evaluation not ready yet")
+
+        eval_row = result.data[0]
+        eval_data = json.loads(eval_row["eval_data"]) if isinstance(eval_row["eval_data"], str) else eval_row["eval_data"]
+        recommendations = json.loads(eval_row["recommendations"]) if isinstance(eval_row.get("recommendations"), str) else eval_row.get("recommendations", [])
+
+        return {
+            "success": True,
+            "evaluation": eval_data,
+            "recommendations": recommendations
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching factual evaluation: {str(e)}")
 
 
 if __name__ == "__main__":
