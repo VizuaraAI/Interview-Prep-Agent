@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import axios from 'axios';
+import { API_ENDPOINTS } from '../../../../config/api';
 
 interface ProjectEvalData {
   detail_level: number;
@@ -31,7 +32,7 @@ export default function ProjectEvaluationPage() {
     const fetchEvaluation = async () => {
       try {
         const response = await axios.get(
-          `http://localhost:8000/evaluate/project/${conversationId}`
+          API_ENDPOINTS.EVALUATE_PROJECT(conversationId)
         );
         if (response.data.success) {
           setEvaluation(response.data.evaluation);

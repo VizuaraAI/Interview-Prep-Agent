@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { API_ENDPOINTS } from '../config/api';
 
 export default function Home() {
   const router = useRouter();
@@ -66,7 +67,7 @@ export default function Home() {
     formData.append('file', file);
 
     try {
-      const response = await axios.post('http://localhost:8000/upload-resume', formData, {
+      const response = await axios.post(API_ENDPOINTS.UPLOAD_RESUME, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },

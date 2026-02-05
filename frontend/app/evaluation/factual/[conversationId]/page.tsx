@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import axios from 'axios';
+import { API_ENDPOINTS } from '../../../../config/api';
 
 interface QuestionEval {
   question: string;
@@ -36,7 +37,7 @@ export default function FactualEvaluationPage() {
     const fetchEvaluation = async () => {
       try {
         const response = await axios.get(
-          `http://localhost:8000/evaluate/factual/${conversationId}`
+          API_ENDPOINTS.EVALUATE_FACTUAL(conversationId)
         );
         if (response.data.success) {
           setEvaluation(response.data.evaluation);

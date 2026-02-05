@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import axios from 'axios';
+import { API_ENDPOINTS } from '../../../config/api';
 
 interface EvaluationData {
   student_name: string;
@@ -45,7 +46,7 @@ export default function EvaluationPage() {
     const fetchEvaluation = async () => {
       try {
         const response = await axios.post(
-          `http://localhost:8000/evaluate?conversation_id=${conversationId}`
+          API_ENDPOINTS.EVALUATE(conversationId)
         );
         setEvaluation(response.data.evaluation);
       } catch (err) {

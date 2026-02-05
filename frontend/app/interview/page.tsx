@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import axios from 'axios';
+import { API_ENDPOINTS } from '../../config/api';
 
 interface Message {
   role: 'assistant' | 'user';
@@ -103,7 +104,7 @@ function InterviewContent() {
     setStarting(true);
 
     try {
-      const response = await axios.post(`http://localhost:8000/start-conversation/${studentId}`);
+      const response = await axios.post(API_ENDPOINTS.START_CONVERSATION(studentId!));
       setConversationId(response.data.conversation_id);
       setCurrentPhase(response.data.phase || 'greeting');
       setMessages([{
@@ -138,7 +139,7 @@ function InterviewContent() {
 
     try {
       const response = await axios.post(
-        `http://localhost:8000/continue-conversation/${conversationId}`,
+        API_ENDPOINTS.CONTINUE_CONVERSATION(conversationId!),
         { message: userInput }
       );
 
@@ -232,7 +233,7 @@ function InterviewContent() {
       const formData = new FormData();
       formData.append('file', audioBlob, 'audio.wav');
 
-      const response = await axios.post('http://localhost:8000/speech-to-text', formData, {
+      const response = await axios.post(API_ENDPOINTS.SPEECH_TO_TEXT, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
