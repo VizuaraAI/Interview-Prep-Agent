@@ -3,4 +3,4 @@
 # while letting nixpacks auto-detect Python
 
 [phases.setup]
-aptPkgs = ["tesseract-ocr", "tesseract-ocr-eng", "poppler-utils"]
+aptPkgs = ["tesseract-ocr", "tesseract-ocr-eng", "poppler-utils", "libxcb1", "libx11-6", "libxext6", "libxrender1", "libgl1-mesa-glx", "libglib2.0-0"]
