@@ -2,7 +2,7 @@
 # Installs system dependencies required by Docling for PDF processing
 
 [phases.setup]
-nixPkgs = ["tesseract", "poppler_utils"]
+nixPkgs = ["python311", "tesseract", "poppler_utils"]
 
 [phases.install]
 cmds = ["pip install -r requirements.txt"]
