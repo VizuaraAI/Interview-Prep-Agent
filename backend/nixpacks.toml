@@ -3,4 +3,23 @@
 # while letting nixpacks auto-detect Python
 
 [phases.setup]
-aptPkgs = ["tesseract-ocr", "tesseract-ocr-eng", "poppler-utils", "libxcb1", "libx11-6", "libxext6", "libxrender1", "libgl1", "libglib2.0-0"]
+aptPkgs = [
+  "tesseract-ocr",
+  "tesseract-ocr-eng",
+  "poppler-utils",
+  "libxcb1",
+  "libxcb-shm0",
+  "libxcb-render0",
+  "libx11-6",
+  "libxext6",
+  "libxrender1",
+  "libgl1",
+  "libglib2.0-0",
+  "libsm6",
+  "libice6",
+  "libfontconfig1",
+  "libfreetype6"
+]
+
+[variables]
+LD_LIBRARY_PATH = "/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
