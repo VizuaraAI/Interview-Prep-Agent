@@ -451,14 +451,15 @@ IMPORTANT RULES:
         student_response = supabase.table("students").insert(student_data).execute()
         student_id = student_response.data[0]["id"]
 
-        # Insert resume sections
+        # Insert resume sections (skip any with null/empty content)
         section_records = []
         for heading, content in sections.items():
-            section_records.append({
-                "student_id": student_id,
-                "heading": heading,
-                "content": content
-            })
+            if content:  # Skip null or empty sections
+                section_records.append({
+                    "student_id": student_id,
+                    "heading": heading,
+                    "content": content
+                })
 
         if section_records:
             supabase.table("resume_sections").insert(section_records).execute()
