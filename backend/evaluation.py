@@ -11,6 +11,55 @@ from supabase import Client
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+def build_metadata_summary(messages: List[Dict]) -> str:
+    """Build a summary of behavioral metadata (anti-cheat signals) for evaluation."""
+    import json
+
+    flagged_responses = []
+    for msg in messages:
+        if msg.get("role") != "user" or not msg.get("metadata"):
+            continue
+
+        meta = msg["metadata"]
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                continue
+
+        response_time = meta.get("response_time_seconds")
+        paste_count = meta.get("paste_count", 0)
+        paste_char_count = meta.get("paste_char_count", 0)
+        suspicious_typing = meta.get("suspicious_typing", False)
+        timer_expired = meta.get("timer_expired", False)
+        content_length = len(msg.get("content", ""))
+
+        flags = []
+        if paste_count > 0:
+            flags.append(f"pasted {paste_count} time(s), {paste_char_count} chars pasted")
+        if suspicious_typing:
+            flags.append("suspiciously fast typing detected (200+ chars in <10s)")
+        if timer_expired:
+            flags.append("timer expired (90s), answer auto-submitted")
+        if response_time is not None and response_time < 10 and content_length > 200:
+            flags.append(f"very fast response ({response_time}s) for a {content_length}-char answer")
+
+        if flags:
+            answer_preview = msg.get("content", "")[:80]
+            flagged_responses.append(
+                f'  - Answer: "{answer_preview}..." | Flags: {", ".join(flags)}'
+            )
+
+    if not flagged_responses:
+        return ""
+
+    return (
+        "\n\nBEHAVIORAL METADATA (Anti-Cheating Signals):\n"
+        "The following responses had suspicious behavioral patterns:\n"
+        + "\n".join(flagged_responses)
+    )
+
+
 def evaluate_project_phase(messages: List[Dict[str, str]], student_name: str) -> Dict[str, any]:
     """
     Evaluate Project Phase (Phase III) based on 3 metrics:
@@ -58,6 +107,7 @@ CRITICAL EVALUATION RULES:
 2. DETECT FAKING/BLUFFING: If the student gave answers that sound like buzzword soup, are technically nonsensical, or clearly don't understand what they're saying, call it out explicitly in the weaknesses.
 3. If a student answered a different question than what was asked, note this as a weakness.
 4. If the student said something technically INCORRECT, quote it and explain why it's wrong.
+5. BEHAVIORAL ANALYSIS: If behavioral metadata is provided showing paste events, suspiciously fast long responses, or timer expirations, factor this into your evaluation. A student who copy-pasted a 300-character answer in 5 seconds likely used external sources. This should reduce their Socrates Metric score as it does not demonstrate genuine understanding. However, do not automatically penalize - consider whether the content quality matches the behavioral flags.
 
 FAKING DETECTION EXAMPLES:
 - "The fetching happens through the server component on Firebase" - This is vague and possibly incorrect. What does "fetching through server component" mean?
@@ -81,9 +131,12 @@ Return ONLY a JSON object with this exact format:
     "honesty_note": "<If faking was detected, include advice like: 'It's better to say \"I don't know\" than to give incorrect answers that damage credibility.'>"
 }"""
 
+    metadata_summary = build_metadata_summary(messages)
+
     user_prompt = f"""Evaluate {student_name}'s project discussion:
 
 {conversation_text}
+{metadata_summary}
 
 Provide scores and justifications for Detail Level, Clarity, and Socrates Metric."""
 
@@ -124,16 +177,17 @@ def evaluate_factual_phase(messages: List[Dict[str, str]], questions_asked: List
     Evaluate Factual Phase (Phase IV) based on correctness of answers.
     """
 
-    # Extract Q&A pairs
+    # Extract Q&A pairs with metadata
     qa_pairs = []
     for i in range(len(messages) - 1):
         if messages[i]['role'] == 'assistant' and messages[i+1]['role'] == 'user':
-            # Extract question from assistant message
             question = messages[i]['content']
             answer = messages[i+1]['content']
+            answer_metadata = messages[i+1].get('metadata', None)
             qa_pairs.append({
                 "question": question,
-                "student_answer": answer
+                "student_answer": answer,
+                "metadata": answer_metadata
             })
 
     if not qa_pairs:
@@ -165,6 +219,8 @@ FAKING DETECTION:
 - If the answer is technically nonsensical (e.g., "cryptography analyzes by noticing differences")
 - Note: It's better to say "I don't know" than to bluff - penalize faking heavily
 
+BEHAVIORAL ANALYSIS: If behavioral flags are provided, consider them in scoring. A student who copy-pasted a long correct answer from an external source should be scored lower than one who typed it from memory. If the answer was auto-submitted due to timer expiry with partial/no content, note this but do not penalize more than the content quality warrants.
+
 Return ONLY a JSON object:
 {
     "score": <0-10>,
@@ -174,9 +230,32 @@ Return ONLY a JSON object:
     "appears_to_be_faking": <true/false>
 }"""
 
+        # Build per-question behavioral metadata note
+        metadata_note = ""
+        if qa.get("metadata"):
+            import json
+            meta = qa["metadata"]
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+            flags = []
+            if meta.get("paste_count", 0) > 0:
+                flags.append(f"Student pasted {meta['paste_count']} time(s), {meta.get('paste_char_count', 0)} chars")
+            if meta.get("suspicious_typing"):
+                flags.append("Suspiciously fast typing detected (200+ chars in <10s)")
+            if meta.get("timer_expired"):
+                flags.append("Timer expired (90s), answer was auto-submitted")
+            rt = meta.get("response_time_seconds")
+            if rt is not None:
+                flags.append(f"Response time: {rt} seconds")
+            if flags:
+                metadata_note = "\n\nBehavioral flags: " + ", ".join(flags)
+
         user_prompt = f"""Question: {qa['question']}
 
-Student Answer: {qa['student_answer']}
+Student Answer: {qa['student_answer']}{metadata_note}
 
 Evaluate the correctness of this answer."""
 

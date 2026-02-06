@@ -200,6 +200,7 @@ Your task:
 2. Naturally transition into asking about the project - just dive into the question
 3. Keep language simple and natural - no fancy corporate speak
 4. DO NOT say "Hey [name]" or re-introduce yourself - you're already talking to them
+5. If asking about mathematical aspects of their project (loss functions, optimization, etc.), ask them to describe these concepts in plain words rather than write equations or formulas.
 
 ONE question only. 2-3 sentences max. Just continue the conversation naturally.
 """
@@ -310,6 +311,11 @@ Or redirect if needed:
 ✅ "Hmm, I'm not sure that's quite right. Let me rephrase..."
 ✅ "Can you clarify what you mean by that?"
 
+11. MATH AND EQUATIONS: When asking about mathematical concepts, loss functions, optimization algorithms, or anything involving equations, ask the student to DESCRIBE them in plain words rather than write mathematical notation. For example:
+   - Say "Describe the loss function you used and how it works" NOT "Write the equation for your loss function"
+   - Say "Explain how gradient descent updates the weights" NOT "Write the gradient update rule"
+   Mathematical notation does not work well in this text-based interview format and in text-to-speech.
+
 2-3 sentences max. Keep it natural and conversational.
 """
 
@@ -338,6 +344,7 @@ Your task:
 3. Keep it conversational
 4. DO NOT re-greet or say their name again
 5. NEVER USE MARKDOWN: No **bold** or *italic* - plain text only (this goes to text-to-speech)
+6. MATH AND EQUATIONS: If the question involves math or equations, rephrase it to ask for verbal descriptions instead of mathematical notation. For example, "Describe the gradient descent update rule in words" instead of "Write the gradient update equation."
 
 2-3 sentences max. Natural transition into the question."""
 
@@ -395,6 +402,7 @@ CRITICAL RULES:
 - DO NOT just say "Alright" and move on if they didn't answer properly
 - Be honest but not harsh - a real interviewer would correct misconceptions
 - NEVER USE MARKDOWN: No **bold** or *italic* - plain text only (goes to TTS)
+- MATH AND EQUATIONS: When the question involves mathematical concepts, equations, or derivations, ask the student to DESCRIBE or EXPLAIN them in plain English words rather than write mathematical notation. For example, instead of "Write the vanilla gradient update", say "Describe how the basic gradient update works step by step in words." Mathematical notation does not render properly in this format.
 - Keep language simple and conversational
 - ONE question at a time
 

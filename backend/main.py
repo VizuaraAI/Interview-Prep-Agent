@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 import os
 import tempfile
-from typing import Dict, List
+from typing import Dict, List, Any
 import re
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -45,7 +45,7 @@ def run_project_evaluation(conversation_id: str, student_name: str):
             "conversation_id", conversation_id
         ).eq("phase", "project_questions").order("created_at").execute()
 
-        project_messages = [{"role": m["role"], "content": m["content"]} for m in messages_result.data]
+        project_messages = [{"role": m["role"], "content": m["content"], "metadata": m.get("metadata")} for m in messages_result.data]
 
         if len(project_messages) > 2:
             evaluation = evaluate_project_phase(project_messages, student_name)
@@ -79,7 +79,7 @@ def run_factual_evaluation(conversation_id: str, questions_asked: List[str]):
             "conversation_id", conversation_id
         ).eq("phase", "factual_questions").order("created_at").execute()
 
-        factual_messages = [{"role": m["role"], "content": m["content"]} for m in messages_result.data]
+        factual_messages = [{"role": m["role"], "content": m["content"], "metadata": m.get("metadata")} for m in messages_result.data]
 
         if len(factual_messages) > 2:
             evaluation = evaluate_factual_phase(factual_messages, questions_asked)
@@ -652,7 +652,7 @@ async def speech_to_text(file: UploadFile = File(...)):
 
 
 @app.post("/continue-conversation/{conversation_id}")
-async def continue_conversation_endpoint(conversation_id: str, user_message: Dict[str, str], background_tasks: BackgroundTasks):
+async def continue_conversation_endpoint(conversation_id: str, user_message: Dict[str, Any], background_tasks: BackgroundTasks):
     """Continue the conversation with user's response"""
     from conversation import (
         continue_conversation, continue_project_questions, start_project_questions,
@@ -675,12 +675,29 @@ async def continue_conversation_endpoint(conversation_id: str, user_message: Dic
 
         user_text = user_message.get("message", "")
 
+        # Extract anti-cheat metadata from frontend
+        response_time_seconds = user_message.get("response_time_seconds", None)
+        paste_count = user_message.get("paste_count", 0)
+        paste_char_count = user_message.get("paste_char_count", 0)
+        suspicious_typing = user_message.get("suspicious_typing", False)
+        timer_expired = user_message.get("timer_expired", False)
+
+        import json as json_meta
+        anti_cheat_metadata = json_meta.dumps({
+            "response_time_seconds": response_time_seconds,
+            "paste_count": paste_count,
+            "paste_char_count": paste_char_count,
+            "suspicious_typing": suspicious_typing,
+            "timer_expired": timer_expired
+        })
+
         # Store user message (tagged with current phase before any transition)
         user_msg_data = {
             "conversation_id": conversation_id,
             "role": "user",
             "content": user_text,
-            "phase": current_phase
+            "phase": current_phase,
+            "metadata": anti_cheat_metadata
         }
         supabase.table("messages").insert(user_msg_data).execute()
 

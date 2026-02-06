@@ -34,10 +34,41 @@ function InterviewContent() {
   const [interviewComplete, setInterviewComplete] = useState(false);
   const [projectPhaseComplete, setProjectPhaseComplete] = useState(false);
 
+  // Anti-cheat: Timer state
+  const [timeRemaining, setTimeRemaining] = useState<number>(90);
+  const [timerActive, setTimerActive] = useState<boolean>(false);
+
+  // Anti-cheat: Paste detection state
+  const [pasteCount, setPasteCount] = useState<number>(0);
+  const [pasteCharCount, setPasteCharCount] = useState<number>(0);
+  const [pasteDetected, setPasteDetected] = useState<boolean>(false);
+  const [suspiciousTyping, setSuspiciousTyping] = useState<boolean>(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  // Anti-cheat: Refs for setInterval closures (state is stale inside intervals)
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const questionStartTimeRef = useRef<number | null>(null);
+  const userInputRef = useRef<string>('');
+  const loadingRef = useRef<boolean>(false);
+  const submittingRef = useRef<boolean>(false);
+  const lastInputLengthRef = useRef<number>(0);
+  const lastInputTimeRef = useRef<number>(Date.now());
+  const isTranscriptionInputRef = useRef<boolean>(false);
+
+  // Keep refs in sync with state (needed for setInterval closures)
+  useEffect(() => { userInputRef.current = userInput; }, [userInput]);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
@@ -49,6 +80,18 @@ function InterviewContent() {
         setTimeout(() => {
           playAudio(latestMessage.audio!);
         }, 100);
+      }
+
+      // Start timer when new assistant question arrives during timed phases
+      if (latestMessage.role === 'assistant' &&
+          (currentPhase === 'project_questions' || currentPhase === 'factual_questions')) {
+        startTimer();
+        // Reset per-question paste tracking
+        setPasteCount(0);
+        setPasteCharCount(0);
+        setSuspiciousTyping(false);
+        lastInputLengthRef.current = 0;
+        lastInputTimeRef.current = Date.now();
       }
     }
   }, [messages]);
@@ -63,6 +106,71 @@ function InterviewContent() {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  // --- Anti-cheat: Timer functions ---
+  const startTimer = () => {
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    setTimeRemaining(90);
+    setTimerActive(true);
+    questionStartTimeRef.current = Date.now();
+
+    timerIntervalRef.current = setInterval(() => {
+      if (loadingRef.current) return; // Pause countdown while waiting for backend
+      setTimeRemaining(prev => {
+        if (prev <= 1) {
+          clearInterval(timerIntervalRef.current!);
+          setTimerActive(false);
+          handleTimerExpiry();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const stopTimer = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    setTimerActive(false);
+  };
+
+  const handleTimerExpiry = () => {
+    const currentInput = userInputRef.current;
+    if (currentInput.trim()) {
+      autoSubmitMessage(currentInput);
+    } else {
+      autoSubmitMessage('No answer provided');
+    }
+  };
+
+  // --- Anti-cheat: Paste and typing detection handlers ---
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = e.clipboardData.getData('text');
+    if (pastedText.length > 0) {
+      setPasteCount(prev => prev + 1);
+      setPasteCharCount(prev => prev + pastedText.length);
+      setPasteDetected(true);
+      setTimeout(() => setPasteDetected(false), 3000);
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    const now = Date.now();
+    const charsDelta = newValue.length - lastInputLengthRef.current;
+    const timeDelta = (now - lastInputTimeRef.current) / 1000;
+
+    // Detect suspiciously instant long input (skip if from voice transcription)
+    if (charsDelta >= 200 && timeDelta < 10 && !isTranscriptionInputRef.current) {
+      setSuspiciousTyping(true);
+    }
+
+    lastInputLengthRef.current = newValue.length;
+    lastInputTimeRef.current = now;
+    setUserInput(newValue);
   };
 
   const playAudio = (audioBase64: string) => {
@@ -119,8 +227,57 @@ function InterviewContent() {
     }
   };
 
+  // Helper to compute metadata and handle response from backend
+  const handleBackendResponse = (response: any) => {
+    const assistantMessage: Message = {
+      role: 'assistant',
+      content: response.data.message,
+      audio: response.data.audio
+    };
+
+    setMessages(prev => [...prev, assistantMessage]);
+
+    const newPhase = response.data.phase || currentPhase;
+    console.log('Backend returned phase:', response.data.phase, '| Current phase:', currentPhase, '| New phase:', newPhase);
+    if (newPhase !== currentPhase) {
+      console.log('Phase changing from', currentPhase, 'to', newPhase);
+      setCurrentPhase(newPhase);
+
+      if (newPhase === 'factual_questions' && response.data.student_topics) {
+        setStudentTopics(response.data.student_topics);
+        setShowTopics(true);
+        setTimeout(() => setShowTopics(false), 5000);
+      }
+    }
+
+    if (response.data.question_metadata) {
+      setQuestionMetadata(response.data.question_metadata);
+    }
+
+    if (response.data.interview_complete) {
+      setInterviewComplete(true);
+    }
+  };
+
+  const getAntiCheatMetadata = (isTimerExpired: boolean = false) => {
+    const responseTimeSeconds = questionStartTimeRef.current
+      ? Math.round((Date.now() - questionStartTimeRef.current) / 1000)
+      : null;
+    return {
+      response_time_seconds: responseTimeSeconds,
+      paste_count: pasteCount,
+      paste_char_count: pasteCharCount,
+      suspicious_typing: suspiciousTyping,
+      timer_expired: isTimerExpired,
+    };
+  };
+
   const sendMessage = async () => {
     if (!userInput.trim() || !conversationId) return;
+    if (submittingRef.current) return; // Prevent double submission
+
+    stopTimer();
+    submittingRef.current = true;
 
     // If interviewer is speaking, stop audio and allow user to respond
     if (isInterviewerSpeaking && audioRef.current) {
@@ -128,9 +285,12 @@ function InterviewContent() {
       setIsInterviewerSpeaking(false);
     }
 
+    const messageText = userInput;
+    const metadata = getAntiCheatMetadata(false);
+
     const userMessage: Message = {
       role: 'user',
-      content: userInput
+      content: messageText
     };
 
     setMessages(prev => [...prev, userMessage]);
@@ -140,42 +300,50 @@ function InterviewContent() {
     try {
       const response = await axios.post(
         API_ENDPOINTS.CONTINUE_CONVERSATION(conversationId!),
-        { message: userInput }
+        { message: messageText, ...metadata }
       );
-
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: response.data.message,
-        audio: response.data.audio
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-
-      const newPhase = response.data.phase || currentPhase;
-      console.log('Backend returned phase:', response.data.phase, '| Current phase:', currentPhase, '| New phase:', newPhase);
-      if (newPhase !== currentPhase) {
-        console.log('Phase changing from', currentPhase, 'to', newPhase);
-        setCurrentPhase(newPhase);
-
-        if (newPhase === 'factual_questions' && response.data.student_topics) {
-          setStudentTopics(response.data.student_topics);
-          setShowTopics(true);
-          setTimeout(() => setShowTopics(false), 5000);
-        }
-      }
-
-      if (response.data.question_metadata) {
-        setQuestionMetadata(response.data.question_metadata);
-      }
-
-      // Track interview completion from backend
-      if (response.data.interview_complete) {
-        setInterviewComplete(true);
-      }
+      handleBackendResponse(response);
     } catch (error) {
       console.error('Error sending message:', error);
     } finally {
       setLoading(false);
+      submittingRef.current = false;
+    }
+  };
+
+  const autoSubmitMessage = async (messageText: string) => {
+    if (!conversationId) return;
+    if (submittingRef.current) return;
+
+    submittingRef.current = true;
+
+    if (isInterviewerSpeaking && audioRef.current) {
+      audioRef.current.pause();
+      setIsInterviewerSpeaking(false);
+    }
+
+    const metadata = getAntiCheatMetadata(true);
+
+    const userMessage: Message = {
+      role: 'user',
+      content: messageText
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setUserInput('');
+    setLoading(true);
+
+    try {
+      const response = await axios.post(
+        API_ENDPOINTS.CONTINUE_CONVERSATION(conversationId!),
+        { message: messageText, ...metadata }
+      );
+      handleBackendResponse(response);
+    } catch (error) {
+      console.error('Error auto-submitting message:', error);
+    } finally {
+      setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -240,7 +408,10 @@ function InterviewContent() {
       });
 
       const transcribedText = response.data.text;
+      isTranscriptionInputRef.current = true;
       setUserInput(transcribedText);
+      // Reset transcription flag after state update
+      setTimeout(() => { isTranscriptionInputRef.current = false; }, 100);
     } catch (error) {
       console.error('Error transcribing audio:', error);
       alert('Error transcribing audio. Please try again.');
@@ -462,16 +633,36 @@ function InterviewContent() {
 
         {/* Input Area */}
         <div className="bg-white rounded-3xl shadow-xl p-4">
+          {/* Countdown Timer */}
+          {timerActive && (currentPhase === 'project_questions' || currentPhase === 'factual_questions') && (
+            <div className="flex items-center justify-between px-4 py-2 mb-2 bg-gray-50 rounded-xl">
+              <span className="text-sm text-gray-500">Time remaining to answer:</span>
+              <span className={`text-lg font-mono font-bold ${
+                timeRemaining <= 15 ? 'text-red-500 animate-pulse' :
+                timeRemaining <= 30 ? 'text-orange-500' :
+                'text-gray-700'
+              }`}>
+                {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+              </span>
+            </div>
+          )}
           <div className="flex gap-4">
-            <textarea
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Type your response or use the microphone..."
-              className="flex-1 rounded-2xl border-2 border-gray-200 px-6 py-4 focus:outline-none focus:border-apple-blue resize-none"
-              rows={2}
-              disabled={loading || isRecording || isTranscribing}
-            />
+            <div className="flex-1 relative">
+              <textarea
+                value={userInput}
+                onChange={handleInputChange}
+                onPaste={handlePaste}
+                onKeyDown={handleKeyPress}
+                placeholder="Type your response or use the microphone..."
+                className="w-full rounded-2xl border-2 border-gray-200 px-6 py-4 focus:outline-none focus:border-apple-blue resize-none"
+                rows={2}
+                disabled={loading || isRecording || isTranscribing}
+              />
+              {/* Subtle paste indicator */}
+              {pasteDetected && (
+                <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
+              )}
+            </div>
             <button
               onClick={isRecording ? stopRecording : startRecording}
               disabled={loading || isTranscribing}
