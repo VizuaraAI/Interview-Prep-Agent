@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from docling.document_converter import DocumentConverter
+import google.generativeai as genai
 import os
 import tempfile
 from typing import Dict, List
@@ -11,6 +11,9 @@ import uuid
 import PyPDF2
 
 load_dotenv()
+
+# Configure Gemini API
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = FastAPI(title="ML Interview Agent - Resume Upload")
 
@@ -361,12 +364,18 @@ async def upload_resume(file: UploadFile = File(...)):
             tmp_file.write(content)
             tmp_file_path = tmp_file.name
 
-        # Extract text using Docling
-        converter = DocumentConverter()
-        result = converter.convert(tmp_file_path)
-
-        # Export to markdown for better structure preservation
-        extracted_text = result.document.export_to_markdown()
+        # Extract text using Gemini API
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        pdf_file = genai.upload_file(tmp_file_path, mime_type="application/pdf")
+        response = model.generate_content([
+            "Extract all text from this resume PDF and format it as markdown. "
+            "Preserve the document structure with section headers using ## format. "
+            "Include all content: name, contact info, education, work experience, "
+            "projects, skills, achievements, courses, etc. "
+            "Return ONLY the extracted markdown text, nothing else.",
+            pdf_file
+        ])
+        extracted_text = response.text
 
         # Extract contact info (pass PDF path for direct name extraction)
         contact_info = extract_contact_info(extracted_text, pdf_path=tmp_file_path)
