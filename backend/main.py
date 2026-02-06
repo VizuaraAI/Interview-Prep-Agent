@@ -364,28 +364,69 @@ async def upload_resume(file: UploadFile = File(...)):
             tmp_file.write(content)
             tmp_file_path = tmp_file.name
 
-        # Extract text using Gemini API
+        # Extract structured data using Gemini API
+        import json as json_module
         model = genai.GenerativeModel("gemini-2.0-flash")
         pdf_file = genai.upload_file(tmp_file_path, mime_type="application/pdf")
         response = model.generate_content([
-            "Extract all text from this resume PDF and format it as markdown. "
-            "Preserve the document structure with section headers using ## format. "
-            "Include all content: name, contact info, education, work experience, "
-            "projects, skills, achievements, courses, etc. "
-            "Return ONLY the extracted markdown text, nothing else.",
+            """Analyze this resume PDF and extract ALL information into the following JSON structure.
+Be thorough - extract EVERY detail from the resume. Do not skip or summarize anything.
+
+Return ONLY valid JSON (no markdown fences, no extra text):
+{
+  "contact_info": {
+    "name": "Full Name",
+    "email": "email@example.com",
+    "phone": "phone number with country code",
+    "linkedin": "linkedin.com/in/username",
+    "github": "github.com/username",
+    "portfolio": "portfolio URL if any"
+  },
+  "gpa": 0.0,
+  "sections": {
+    "Education": "Complete education details including institution names, degrees, dates, GPA/CGPA, relevant coursework - preserve ALL details",
+    "Work Experience": "Complete work experience with company names, roles, dates, and ALL bullet points describing responsibilities and achievements",
+    "Projects": "ALL projects with titles, tech stacks, dates, and COMPLETE descriptions including every bullet point",
+    "Technical Skills": "ALL skills listed - programming languages, frameworks, tools, databases, etc.",
+    "Achievements": "ALL achievements, awards, certifications, competitions",
+    "Key Courses Taken": "ALL relevant courses mentioned"
+  }
+}
+
+IMPORTANT RULES:
+- For "sections": use EXACTLY these keys where applicable: "Education", "Work Experience", "Projects", "Technical Skills", "Achievements", "Key Courses Taken"
+- If the resume has additional sections not in the list above, include them with their original heading name
+- For each section, include the COMPLETE content - every bullet point, every detail, every date
+- For "gpa": extract GPA/CGPA as a float (e.g., 8.5). If percentage, divide by 10. If not found, use 0.0
+- For contact fields not found in the resume, use empty string ""
+- Do NOT summarize or shorten any content - include everything verbatim from the resume""",
             pdf_file
         ])
-        extracted_text = response.text
 
-        # Extract contact info (pass PDF path for direct name extraction)
-        contact_info = extract_contact_info(extracted_text, pdf_path=tmp_file_path)
+        # Parse Gemini's JSON response
+        response_text = response.text.strip()
+        # Remove markdown code fences if present
+        if response_text.startswith("```"):
+            response_text = response_text.split("\n", 1)[1]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3].strip()
+            elif "```" in response_text:
+                response_text = response_text[:response_text.rfind("```")].strip()
 
-        # Parse sections
-        sections = parse_resume_sections(extracted_text)
+        parsed_data = json_module.loads(response_text)
 
-        # Extract GPA from education section
-        education_section = sections.get("Education", "")
-        gpa = extract_gpa(education_section)
+        contact_info = parsed_data.get("contact_info", {})
+        # Ensure all expected keys exist
+        for key in ["name", "email", "phone", "linkedin", "github", "portfolio"]:
+            if key not in contact_info:
+                contact_info[key] = ""
+
+        sections = parsed_data.get("sections", {})
+        gpa = float(parsed_data.get("gpa", 0.0))
+
+        # Fallback: if Gemini didn't extract the name, try PyPDF2
+        if not contact_info.get("name"):
+            contact_info["name"] = extract_name_from_pdf(tmp_file_path)
 
         # Store in Supabase
         # Insert student record
