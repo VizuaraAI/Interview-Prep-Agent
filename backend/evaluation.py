@@ -95,16 +95,21 @@ Provide scores and justifications for Detail Level, Clarity, and Socrates Metric
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.3,
-            max_completion_tokens=1000,
+            max_completion_tokens=3000,
             response_format={"type": "json_object"}
         )
 
         import json
-        evaluation = json.loads(response.choices[0].message.content)
+        raw_content = response.choices[0].message.content
+        print(f"Project evaluation raw response length: {len(raw_content)}")
+        evaluation = json.loads(raw_content)
+        print(f"Project evaluation scores: detail={evaluation.get('detail_level')}, clarity={evaluation.get('clarity')}, socrates={evaluation.get('socrates_metric')}")
         return evaluation
 
     except Exception as e:
         print(f"Error evaluating project phase: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "detail_level": 0,
             "clarity": 0,
@@ -183,7 +188,7 @@ Evaluate the correctness of this answer."""
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.2,
-                max_completion_tokens=500,
+                max_completion_tokens=1500,
                 response_format={"type": "json_object"}
             )
 
