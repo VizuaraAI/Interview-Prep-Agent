@@ -378,15 +378,19 @@ Return ONLY valid JSON (no markdown fences, no extra text):
     "name": "Full Name",
     "email": "email@example.com",
     "phone": "phone number with country code",
-    "linkedin": "linkedin.com/in/username",
-    "github": "github.com/username",
+    "linkedin": "full LinkedIn URL (e.g. linkedin.com/in/username)",
+    "github": "full GitHub URL (e.g. github.com/username)",
     "portfolio": "portfolio URL if any"
   },
   "gpa": 0.0,
+  "top_projects": [
+    {"title": "Actual descriptive project name", "content": "Complete project description with all bullet points and details"},
+    {"title": "Actual descriptive project name", "content": "Complete project description with all bullet points and details"}
+  ],
   "sections": {
     "Education": "Complete education details including institution names, degrees, dates, GPA/CGPA, relevant coursework - preserve ALL details",
     "Work Experience": "Complete work experience with company names, roles, dates, and ALL bullet points describing responsibilities and achievements",
-    "Projects": "ALL projects formatted as: **Project Title**\\nDescription and bullet points. The project title MUST be the actual project name (e.g., 'Machine learning aided global quarantine analysis during Covid-19'), NOT a location like 'Cambridge, MA'. Include tech stacks, dates, and COMPLETE descriptions.",
+    "Projects": "ALL projects with their full names, descriptions, tech stacks, dates, and every bullet point",
     "Technical Skills": "ALL skills listed - programming languages, frameworks, tools, databases, etc.",
     "Achievements": "ALL achievements, awards, certifications, competitions",
     "Key Courses Taken": "ALL relevant courses mentioned"
@@ -394,6 +398,8 @@ Return ONLY valid JSON (no markdown fences, no extra text):
 }
 
 IMPORTANT RULES:
+- For "contact_info": Extract LinkedIn and GitHub URLs even if they are hidden behind icons or hyperlinked text. Look for any clickable links in the PDF that point to linkedin.com or github.com. If the resume shows icons or text like "LinkedIn" or "GitHub" with embedded hyperlinks, extract the actual destination URLs.
+- For "top_projects": Pick the 2 most impressive/relevant projects. The "title" MUST be the actual descriptive project name (e.g., "Machine learning aided global quarantine analysis during Covid-19"), NEVER a location (like "Cambridge, MA"), a date (like "2024"), or a generic label. The title should clearly describe what the project is about.
 - For "sections": use EXACTLY these keys where applicable: "Education", "Work Experience", "Projects", "Technical Skills", "Achievements", "Key Courses Taken"
 - If the resume has additional sections not in the list above, include them with their original heading name
 - For each section, include the COMPLETE content - every bullet point, every detail, every date
@@ -422,6 +428,7 @@ IMPORTANT RULES:
                 contact_info[key] = ""
 
         sections = parsed_data.get("sections", {})
+        top_projects = parsed_data.get("top_projects", [])
         gpa = float(parsed_data.get("gpa", 0.0))
 
         # Fallback: if Gemini didn't extract the name, try PyPDF2
@@ -455,6 +462,15 @@ IMPORTANT RULES:
 
         if section_records:
             supabase.table("resume_sections").insert(section_records).execute()
+
+        # Store top projects as a special section for easy retrieval
+        import json as json_mod
+        if top_projects:
+            supabase.table("resume_sections").insert({
+                "student_id": student_id,
+                "heading": "_top_projects",
+                "content": json_mod.dumps(top_projects)
+            }).execute()
 
         # Clean up temp file
         os.unlink(tmp_file_path)
@@ -538,9 +554,15 @@ async def start_conversation(student_id: str):
         for section in sections_response.data:
             sections[section["heading"]] = section["content"]
 
-        # Extract top 2 projects
-        projects_section = sections.get("Projects", "")
-        top_projects = extract_top_two_projects(projects_section)
+        # Get top 2 projects (extracted by Gemini during upload)
+        import json
+        top_projects_section = sections.get("_top_projects", "")
+        if top_projects_section:
+            top_projects = json.loads(top_projects_section) if isinstance(top_projects_section, str) else top_projects_section
+        else:
+            # Fallback to old parser if Gemini data not available
+            projects_section = sections.get("Projects", "")
+            top_projects = extract_top_two_projects(projects_section)
 
         # Create resume summary for context
         resume_summary = create_resume_summary(sections)

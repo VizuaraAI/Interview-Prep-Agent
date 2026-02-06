@@ -87,7 +87,7 @@ CRITICAL INSTRUCTIONS:
 
 
 def strip_markdown(text: str) -> str:
-    """Remove markdown formatting from text for TTS"""
+    """Remove markdown formatting and AI artifacts from text"""
     import re
     # Remove bold **text** or __text__
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
@@ -99,6 +99,12 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r'`(.+?)`', r'\1', text)
     # Remove headers #
     text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+    # Replace em-dashes and en-dashes with regular dashes
+    text = text.replace('\u2014', '-').replace('\u2013', '-')
+    # Strip LaTeX notation (e.g., \theta, \alpha, \nabla)
+    text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+    # Remove dollar signs used for LaTeX math mode
+    text = re.sub(r'\$+', '', text)
     return text
 
 

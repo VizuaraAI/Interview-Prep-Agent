@@ -122,10 +122,10 @@ function InterviewContent() {
   const sendMessage = async () => {
     if (!userInput.trim() || !conversationId) return;
 
-    if (isInterviewerSpeaking) {
-      setShowInterruptionWarning(true);
-      setTimeout(() => setShowInterruptionWarning(false), 3000);
-      return;
+    // If interviewer is speaking, stop audio and allow user to respond
+    if (isInterviewerSpeaking && audioRef.current) {
+      audioRef.current.pause();
+      setIsInterviewerSpeaking(false);
     }
 
     const userMessage: Message = {
