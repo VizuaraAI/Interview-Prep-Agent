@@ -82,17 +82,7 @@ function InterviewContent() {
         }, 100);
       }
 
-      // Start timer when new assistant question arrives during timed phases
-      if (latestMessage.role === 'assistant' &&
-          (currentPhase === 'project_questions' || currentPhase === 'factual_questions')) {
-        startTimer();
-        // Reset per-question paste tracking
-        setPasteCount(0);
-        setPasteCharCount(0);
-        setSuspiciousTyping(false);
-        lastInputLengthRef.current = 0;
-        lastInputTimeRef.current = Date.now();
-      }
+      // Timer is now started directly in handleBackendResponse (avoids stale closure issue)
     }
   }, [messages]);
 
@@ -256,6 +246,18 @@ function InterviewContent() {
 
     if (response.data.interview_complete) {
       setInterviewComplete(true);
+    }
+
+    // Start timer when assistant question arrives during timed phases
+    // (Done here instead of useEffect to avoid stale closure on currentPhase)
+    if (newPhase === 'project_questions' || newPhase === 'factual_questions') {
+      startTimer();
+      // Reset per-question paste tracking
+      setPasteCount(0);
+      setPasteCharCount(0);
+      setSuspiciousTyping(false);
+      lastInputLengthRef.current = 0;
+      lastInputTimeRef.current = Date.now();
     }
   };
 
