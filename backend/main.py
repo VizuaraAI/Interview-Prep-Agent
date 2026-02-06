@@ -697,10 +697,17 @@ async def continue_conversation_endpoint(conversation_id: str, user_message: Dic
             "conversation_id": conversation_id,
             "role": "user",
             "content": user_text,
-            "phase": current_phase,
-            "metadata": anti_cheat_metadata
+            "phase": current_phase
         }
-        supabase.table("messages").insert(user_msg_data).execute()
+        # Try to include metadata (requires metadata JSONB column in messages table)
+        try:
+            user_msg_data["metadata"] = anti_cheat_metadata
+            supabase.table("messages").insert(user_msg_data).execute()
+        except Exception as meta_err:
+            # If metadata column doesn't exist yet, retry without it
+            print(f"Warning: metadata insert failed ({meta_err}), retrying without metadata")
+            user_msg_data.pop("metadata", None)
+            supabase.table("messages").insert(user_msg_data).execute()
 
         # Get student info
         student_response = supabase.table("students").select("*").eq("id", student_id).execute()
