@@ -28,6 +28,10 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Replace opencv-python with headless version (removes X11/Qt dependency)
+RUN pip uninstall -y opencv-python 2>/dev/null; \
+    pip install --no-cache-dir opencv-python-headless
+
 # Copy the rest of the application
 COPY . .
 
