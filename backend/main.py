@@ -386,7 +386,7 @@ Return ONLY valid JSON (no markdown fences, no extra text):
   "sections": {
     "Education": "Complete education details including institution names, degrees, dates, GPA/CGPA, relevant coursework - preserve ALL details",
     "Work Experience": "Complete work experience with company names, roles, dates, and ALL bullet points describing responsibilities and achievements",
-    "Projects": "ALL projects with titles, tech stacks, dates, and COMPLETE descriptions including every bullet point",
+    "Projects": "ALL projects formatted as: **Project Title**\\nDescription and bullet points. The project title MUST be the actual project name (e.g., 'Machine learning aided global quarantine analysis during Covid-19'), NOT a location like 'Cambridge, MA'. Include tech stacks, dates, and COMPLETE descriptions.",
     "Technical Skills": "ALL skills listed - programming languages, frameworks, tools, databases, etc.",
     "Achievements": "ALL achievements, awards, certifications, competitions",
     "Key Courses Taken": "ALL relevant courses mentioned"
